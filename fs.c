@@ -43,15 +43,19 @@ int fs_format()
 /*
 Creates a new filesystem on the disk, destroys any data already present.  Sets aside
 10% of the blocks for inodes.  Clears the inode table.  Writes the superblock.  Returns
-one on success and zero on failure.  When attempting to mount an already mounted disk,
+one on success and zero on failure.  When attempting to format an already mounted disk,
 it does nothing and returns failure.
 */
 {
 	if (IS_MOUNTED == 1){
 		// The disk is already mounted so return failure
+		printf("disk has already been mounted so format returns failure");
 		return 0;
 	}
 	else{
+
+		// Initialize a blank block
+		union fs_block new_block;
 
 		// Initialize the superblock
 		struct fs_superblock new_superblock;
@@ -59,7 +63,7 @@ it does nothing and returns failure.
 		new_superblock.nblocks = disk_size();
 
 		// Sets aside 10% of the blocks for inodes
-		new_superblock.ninodeblocks = round(new_superblock.nblocks * .10);
+		new_superblock.ninodeblocks = new_superblock.nblocks * .10 + 1;
 		new_superblock.ninodes = INODES_PER_BLOCK * new_superblock.ninodeblocks;
 
 		// Clear the inode table
@@ -70,15 +74,14 @@ it does nothing and returns failure.
 		int j;
 		for (j = 0; j < POINTERS_PER_INODE; j++){blank_inode.direct[j] = 0;}
 		blank_inode.indirect = 0;
-		union fs_block blank_block;
-		blank_block.inode[0] = blank_inode;
+		
 		int i;
-		for (i = 1; i <= new_superblock.ninodeblocks; i++){
-			disk_write(i, blank_block.data);
+		for (i = 0; i < POINTERS_PER_INODE; i++){
+			new_block.inode[i] = blank_inode;
 		}
 
 		// Write the superblock
-		union fs_block new_block;
+		
 		new_block.super = new_superblock;
 
 		disk_write(0, new_block.data);
@@ -320,18 +323,134 @@ inode and return them to the free block map. On success, return one. On failure,
 		return 1;
 		
 	}
+	printf("%d is not a valid inode to delete \n", inumber);
 	return 0;
 	
 }
 
 int fs_getsize( int inumber )
+/*
+Return the logical size of the given inode, in bytes. Note that zero is a valid logical size 
+for an inode! On failure, return -1.
+*/
 {
-	return -1;
+	// Convert the numbers
+	int block_number = inumber/127 + 1;
+	int i_number = inumber % 127;
+	
+	// Read the block
+	union fs_block block;
+	disk_read(block_number, block.data);
+
+	if ( block.inode[i_number].isvalid == 1){
+		return block.inode[i_number].size;
+	}
+	else{
+		return -1;
+	}
 }
 
 int fs_read( int inumber, char *data, int length, int offset )
+/*
+Read data from a valid inode. Copy "length" bytes from the inode into the "data" pointer, 
+starting at "offset" in the inode. Return the total number of bytes read. The number of bytes 
+actually read could be smaller than the number of bytes requested, perhaps if the end of the 
+inode is reached. If the given inumber is invalid, or any other error is encountered, return 0.
+*/
 {
-	return 0;
+
+	// Convert the inumber 
+	int block_number = inumber/127 + 1;
+	int i_number = inumber % 127;
+	int begin_block = offset / DISK_BLOCK_SIZE;
+	int end_block = offset + length;
+
+
+	// Read the block
+	union fs_block block;
+	disk_read(block_number, block.data);
+
+	// Check if it's valid
+	if ( block.inode[i_number].isvalid == 0){
+		printf("error in reading.  invalid number.");
+		return 0;
+	}
+
+	// If the length will put you off the block, set the 
+	// end block to the size 
+	if (length + offset > block.inode[i_number].size){
+		end_block = block.inode[i_number].size;
+	}
+
+	// Calculate the last block to read
+	int last_block = ceil((double)end_block / (double)DISK_BLOCK_SIZE);
+
+	// Get remainder
+	int partial_read = end_block % DISK_BLOCK_SIZE;
+
+	// Calculate the number of direct blocks
+	int num_direct_blocks;
+
+	
+	if (last_block > POINTERS_PER_INODE){
+		num_direct_blocks = POINTERS_PER_INODE;
+	}
+	else{
+		num_direct_blocks = last_block;
+	}
+
+	// Read from begin_block --> last_block
+	// Loop through each of the blocks that the inode has
+	int i, index;
+	int data_read_so_far = 0;
+	union fs_block each_block;
+	for (i = begin_block; i < num_direct_blocks; i++){
+		printf("Inside the direct blocks \n");
+		if (i == last_block){
+			index = partial_read;
+		}
+		else{
+			index = DISK_BLOCK_SIZE;
+		}
+		
+		disk_read(block.inode[i_number].direct[i], each_block.data);
+		memcpy(data+data_read_so_far, each_block.data, index);
+		data_read_so_far = data_read_so_far + index;
+	}
+
+	int start_for_indirect;
+	if (begin_block >= 5){
+		start_for_indirect = begin_block;
+	}
+	else {
+		start_for_indirect = 0;
+	}
+
+	int num_indirect = last_block - num_direct_blocks;
+
+	// Read the indirect block in
+	union fs_block indirect_block;
+	disk_read(block.inode[i_number].indirect , indirect_block.data);
+
+	// Set all the indirect pointers to 0
+	int pointer;
+	union fs_block pointer_block;
+	for (i = start_for_indirect; i < num_indirect; i++){
+		if (i == last_block){
+			index = partial_read;
+		}
+		else{
+			index = DISK_BLOCK_SIZE;
+		}
+		// Get the info for the block that the pointer is indicating
+		pointer = indirect_block.pointers[i];
+		disk_read(pointer, pointer_block.data);
+
+		// Copy over the data
+		memcpy(data+data_read_so_far, pointer_block.data, index);
+		data_read_so_far = data_read_so_far + index;
+	}
+	return data_read_so_far;
 }
 
 int fs_write( int inumber, const char *data, int length, int offset )

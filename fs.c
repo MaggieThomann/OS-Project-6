@@ -62,7 +62,19 @@ it does nothing and returns failure.
 		new_superblock.ninodes = INODES_PER_BLOCK * new_superblock.ninodeblocks;
 
 		// Clear the inode table
-		// NOT IMPLEMENTED
+
+		struct fs_inode blank_inode;
+		blank_inode.isvalid = 0;
+		blank_inode.size = 0;
+		int j;
+		for (j = 0; j < POINTERS_PER_INODE; j++){blank_inode.direct[j] = 0;}
+		blank_inode.indirect = 0;
+		union fs_block blank_block;
+		blank_block.inode[0] = blank_inode;
+		int i;
+		for (i = 1; i <= new_superblock.ninodeblocks; i++){
+			disk_write(i, blank_block.data);
+		}
 
 		// Write the superblock
 		union fs_block new_block;

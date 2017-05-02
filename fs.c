@@ -223,9 +223,29 @@ int fs_create()
 Create a new inode of zero length. On success, return the (positive) inumber. On failure, return zero.
 */
 {
+	if (IS_MOUNTED == 0){
+		printf("disk not yet mounted \n");
+		return 0;
+	}
 	struct fs_inode new;
 	new.size = 0;
+
+	// Get the number of inodes
+	union fs_block block;
+	disk_read(0, block.data);
+	
+	int num_inodes = block.super.ninodes;
+
+	int i;
+	for (i = 0; i < num_inodes; i++){
+		if ((INODE_BITMAP[i] == 0) && (i > 0)){
+			INODE_BITMAP[i] = 1;
+			return i;
+		}
+	}
+	
 	return 0;
+
 }
 
 int fs_delete( int inumber )

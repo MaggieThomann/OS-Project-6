@@ -15,7 +15,8 @@
 #define POINTERS_PER_BLOCK 1024
 
 int IS_MOUNTED = 0;
-int *BITMAP;
+int *BLOCK_BITMAP;
+int *INODE_BITMAP;
 
 struct fs_superblock {
 	int magic;
@@ -171,38 +172,44 @@ int fs_mount()
 			// Read the superblock
 			struct fs_superblock superblock;
 			superblock = block.super;
-
-			// Initialize a free block bitmap
 			superblock.nblocks = disk_size();
 			superblock.ninodeblocks = round(superblock.nblocks * .10);
 			superblock.ninodes = INODES_PER_BLOCK * superblock.ninodeblocks;
 
-			BITMAP = (int *)malloc(sizeof(int)*superblock.nblocks); 
 			int i, j, k, m;
+
+			// Initialize and fill the bitmaps with zeros for now
+			BLOCK_BITMAP = (int *)malloc(sizeof(int)*superblock.nblocks); 
+			for (i = 0; i < superblock.nblocks; i++){ BLOCK_BITMAP[i] = 0;}
+			INODE_BITMAP = (int *)malloc(sizeof(int)*superblock.ninodes); 
+			for (i = 0; i < superblock.ninodes; i++){INODE_BITMAP[i] = 0;}
+			
+			// Iterate through and update any unavailable positions with 1s
 			for (j = 1; j < superblock.ninodeblocks; j++){
 				disk_read(j, block.data);
 				for (i = 0; i < INODES_PER_BLOCK; i++){
 					if (block.inode[i].isvalid != 0){
-
+						INODE_BITMAP[i] = 1;
 						for (k = 0; k < POINTERS_PER_INODE; k++){
 							if (block.inode[i].direct[k] != 0){
-								BITMAP[block.inode[i].direct[k]] = 1;
+								BLOCK_BITMAP[block.inode[i].direct[k]] = 1;
 							}
 						}
 						if (block.inode[i].indirect != 0){
-							BITMAP[block.inode[i].indirect] = 1;
+							BLOCK_BITMAP[block.inode[i].indirect] = 1;
 
 							disk_read(block.inode[i].indirect, indirect_block.data);
 							for (m = 0; m < POINTERS_PER_BLOCK; m++){
 								if (indirect_block.pointers[m] != 0){
-									 BITMAP[indirect_block.pointers[m]] = 1;
+									 BLOCK_BITMAP[indirect_block.pointers[m]] = 1;
 								}
 							}
 						}
 
 					}
 				}
-			}
+			}			
+
 			IS_MOUNTED = 1;
 			return 1;
 		}
@@ -212,7 +219,12 @@ int fs_mount()
 }
 
 int fs_create()
+/*
+Create a new inode of zero length. On success, return the (positive) inumber. On failure, return zero.
+*/
 {
+	struct fs_inode new;
+	new.size = 0;
 	return 0;
 }
 

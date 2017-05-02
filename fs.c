@@ -40,15 +40,61 @@ int fs_format()
 }
 
 void fs_debug()
+/*
+Scans a mounted filesystem and reports on how the inodes and blocks are organized 
+*/
 {
 	union fs_block block;
+	union fs_block indirect_block;
 
 	disk_read(0,block.data);
 
 	printf("superblock:\n");
+	int magic_number = block.super.magic; 
+	if (magic_number == FS_MAGIC){
+		printf("    magic number is valid\n");
+	}
+	else {
+		printf("    magic number is invalid\n");
+	}
 	printf("    %d blocks\n",block.super.nblocks);
 	printf("    %d inode blocks\n",block.super.ninodeblocks);
 	printf("    %d inodes\n",block.super.ninodes);
+
+	int num_inode_blocks = block.super.ninodeblocks;
+	int num_inodes = block.super.ninodes;
+	int num_inodes_per_block = num_inodes / num_inode_blocks;
+
+	int i, j, k, m;
+	for (j = 1; j <= num_inode_blocks; j++){
+		disk_read(j, block.data);
+		for (i = 0; i < num_inodes_per_block; i++){
+			if (block.inode[i].isvalid != 0){
+				printf("inode %d:\n", i);
+				printf("    size %d bytes\n",block.inode[i].size);
+				printf("    direct blocks:");
+				for (k = 0; k < POINTERS_PER_INODE; k++){
+					if (block.inode[i].direct[k] != 0){
+						printf(" %d ", block.inode[i].direct[k]);
+					}
+				}
+				printf("\n");
+				if (block.inode[i].indirect != 0){
+					printf("    indirect block: %d \n", block.inode[i].indirect);
+					printf("    indirect data blocks:");
+					disk_read(block.inode[i].indirect, indirect_block.data);
+					for (m = 0; m < POINTERS_PER_BLOCK; m++){
+						if (indirect_block.pointers[m] != 0){
+							printf(" %d ", indirect_block.pointers[m]);
+						}
+					}
+					printf("\n");
+
+				}
+			}
+		}
+		
+	}
 }
 
 int fs_mount()

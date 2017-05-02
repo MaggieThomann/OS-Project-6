@@ -154,51 +154,58 @@ failure.
 
 int fs_mount()
 {
-	union fs_block block;
-	union fs_block indirect_block;
+	if (IS_MOUNTED == 1){
+		printf("disk has already been mounted \n");
+		return 0;
+	}
+	else{
+		union fs_block block;
+		union fs_block indirect_block;
 
-	disk_read(0,block.data);
-	int magic_number = block.super.magic;
+		disk_read(0,block.data);
+		int magic_number = block.super.magic;
 
-	// Check if a file system is present
-	if (magic_number == FS_MAGIC){
+		// Check if a file system is present
+		if (magic_number == FS_MAGIC){
 
-		// Read the superblock
-		struct fs_superblock superblock;
-		superblock = block.super;
+			// Read the superblock
+			struct fs_superblock superblock;
+			superblock = block.super;
 
-		// Initialize a free block bitmap
-		superblock.nblocks = disk_size();
-		superblock.ninodeblocks = round(superblock.nblocks * .10);
-		superblock.ninodes = INODES_PER_BLOCK * superblock.ninodeblocks;
+			// Initialize a free block bitmap
+			superblock.nblocks = disk_size();
+			superblock.ninodeblocks = round(superblock.nblocks * .10);
+			superblock.ninodes = INODES_PER_BLOCK * superblock.ninodeblocks;
 
-		BITMAP = (int *)malloc(sizeof(int)*superblock.nblocks); 
-		int i, j, k, m;
-		for (j = 1; j < superblock.ninodeblocks; j++){
-			disk_read(j, block.data);
-			for (i = 0; i < INODES_PER_BLOCK; i++){
-				if (block.inode[i].isvalid != 0){
+			BITMAP = (int *)malloc(sizeof(int)*superblock.nblocks); 
+			int i, j, k, m;
+			for (j = 1; j < superblock.ninodeblocks; j++){
+				disk_read(j, block.data);
+				for (i = 0; i < INODES_PER_BLOCK; i++){
+					if (block.inode[i].isvalid != 0){
 
-					for (k = 0; k < POINTERS_PER_INODE; k++){
-						if (block.inode[i].direct[k] != 0){
-							BITMAP[block.inode[i].direct[k]] = 1;
-						}
-					}
-					if (block.inode[i].indirect != 0){
-						BITMAP[block.inode[i].indirect] = 1;
-
-						disk_read(block.inode[i].indirect, indirect_block.data);
-						for (m = 0; m < POINTERS_PER_BLOCK; m++){
-							if (indirect_block.pointers[m] != 0){
-								 BITMAP[indirect_block.pointers[m]] = 1;
+						for (k = 0; k < POINTERS_PER_INODE; k++){
+							if (block.inode[i].direct[k] != 0){
+								BITMAP[block.inode[i].direct[k]] = 1;
 							}
 						}
-					}
+						if (block.inode[i].indirect != 0){
+							BITMAP[block.inode[i].indirect] = 1;
 
+							disk_read(block.inode[i].indirect, indirect_block.data);
+							for (m = 0; m < POINTERS_PER_BLOCK; m++){
+								if (indirect_block.pointers[m] != 0){
+									 BITMAP[indirect_block.pointers[m]] = 1;
+								}
+							}
+						}
+
+					}
 				}
 			}
+			IS_MOUNTED = 1;
+			return 1;
 		}
-		return 1;
 	}
 	
 	return 0;

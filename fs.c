@@ -7,11 +7,15 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <unistd.h>
+#include <math.h>
 
 #define FS_MAGIC           0xf0f03410
 #define INODES_PER_BLOCK   128
 #define POINTERS_PER_INODE 5
 #define POINTERS_PER_BLOCK 1024
+
+int IS_MOUNTED = 0;
+int *BITMAP;
 
 struct fs_superblock {
 	int magic;
@@ -35,7 +39,40 @@ union fs_block {
 };
 
 int fs_format()
+/*
+Creates a new filesystem on the disk, destroys any data already present.  Sets aside
+10% of the blocks for inodes.  Clears the inode table.  Writes the superblock.  Returns
+one on success and zero on failure.  When attempting to mount an already mounted disk,
+it does nothing and returns failure.
+*/
 {
+	if (IS_MOUNTED == 1){
+		// The disk is already mounted so return failure
+		return 0;
+	}
+	else{
+
+		// Initialize the superblock
+		struct fs_superblock new_superblock;
+		new_superblock.magic = FS_MAGIC;
+		new_superblock.nblocks = disk_size();
+
+		// Sets aside 10% of the blocks for inodes
+		new_superblock.ninodeblocks = round(new_superblock.nblocks * .10);
+		new_superblock.ninodes = INODES_PER_BLOCK * new_superblock.ninodeblocks;
+
+		// Clear the inode table
+		// NOT IMPLEMENTED
+
+		// Write the superblock
+		union fs_block new_block;
+		new_block.super = new_superblock;
+
+		disk_write(0, new_block.data);
+
+		return 1;
+
+	}
 	return 0;
 }
 
@@ -97,8 +134,61 @@ Scans a mounted filesystem and reports on how the inodes and blocks are organize
 	}
 }
 
+/*
+Examines the disk for a filesystem. If one is present, reads the superblock, builds a free
+block bitmap and prepares the filesystem for use.  Returns one on success and zero on 
+failure.
+*/
+
 int fs_mount()
 {
+	union fs_block block;
+	union fs_block indirect_block;
+
+	disk_read(0,block.data);
+	int magic_number = block.super.magic;
+
+	// Check if a file system is present
+	if (magic_number == FS_MAGIC){
+
+		// Read the superblock
+		struct fs_superblock superblock;
+		superblock = block.super;
+
+		// Initialize a free block bitmap
+		superblock.nblocks = disk_size();
+		superblock.ninodeblocks = round(superblock.nblocks * .10);
+		superblock.ninodes = INODES_PER_BLOCK * superblock.ninodeblocks;
+
+		BITMAP = (int *)malloc(sizeof(int)*superblock.nblocks); 
+		int i, j, k, m;
+		for (j = 1; j < superblock.ninodeblocks; j++){
+			disk_read(j, block.data);
+			for (i = 0; i < INODES_PER_BLOCK; i++){
+				if (block.inode[i].isvalid != 0){
+
+					for (k = 0; k < POINTERS_PER_INODE; k++){
+						if (block.inode[i].direct[k] != 0){
+							BITMAP[block.inode[i].direct[k]] = 1;
+						}
+					}
+					if (block.inode[i].indirect != 0){
+						BITMAP[block.inode[i].indirect] = 1;
+
+						disk_read(block.inode[i].indirect, indirect_block.data);
+						for (m = 0; m < POINTERS_PER_BLOCK; m++){
+							if (indirect_block.pointers[m] != 0){
+								 BITMAP[indirect_block.pointers[m]] = 1;
+							}
+						}
+					}
+
+				}
+			}
+		}
+		return 1;
+	}
+	
 	return 0;
 }
 

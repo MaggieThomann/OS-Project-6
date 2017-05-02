@@ -181,9 +181,9 @@ int fs_mount()
 			int i, j, k, m;
 
 			// Initialize and fill the bitmaps with zeros for now
-			BLOCK_BITMAP = (int *)malloc(sizeof(int)*superblock.nblocks); 
+			BLOCK_BITMAP = malloc(sizeof(int)*superblock.nblocks); 
 			for (i = 0; i < superblock.nblocks; i++){ BLOCK_BITMAP[i] = 0;}
-			INODE_BITMAP = (int *)malloc(sizeof(int)*superblock.ninodes); 
+			INODE_BITMAP = malloc(sizeof(int)*superblock.ninodes); 
 			for (i = 0; i < superblock.ninodes; i++){INODE_BITMAP[i] = 0;}
 			
 			// Iterate through and update any unavailable positions with 1s
@@ -359,6 +359,11 @@ inode is reached. If the given inumber is invalid, or any other error is encount
 */
 {
 
+	if (IS_MOUNTED == 0){
+		printf("file system has not yet been mounted. \n");
+		return 0;
+	}
+
 	// Convert the inumber 
 	int block_number = inumber/127 + 1;
 	int i_number = inumber % 127;
@@ -371,7 +376,7 @@ inode is reached. If the given inumber is invalid, or any other error is encount
 	disk_read(block_number, block.data);
 
 	// Check if it's valid
-	if ( block.inode[i_number].isvalid == 0){
+	if (INODE_BITMAP[inumber] == 0){
 		printf("error in reading.  invalid number.");
 		return 0;
 	}
@@ -453,7 +458,55 @@ inode is reached. If the given inumber is invalid, or any other error is encount
 	return data_read_so_far;
 }
 
-int fs_write( int inumber, const char *data, int length, int offset )
-{
+int get_free_block(){
+	// Get the super block
+	union fs_block block;
+	disk_read(0,block.data);
+	struct fs_superblock super = block.super;
+	int num_blocks = super.nblocks;
+
+	int i;
+	for (i = 1; i < num_blocks; i++){
+		if (BLOCK_BITMAP[i] == 0){
+			return i;    
+		}
+	}
 	return 0;
+}
+
+int fs_write( int inumber, const char *data, int length, int offset )
+/*
+Write data to a valid inode. Copy "length" bytes from the pointer "data" into the inode 
+starting at "offset" bytes. Allocate any necessary direct and indirect blocks in the process. 
+Return the number of bytes actually written. The number of bytes actually written could be 
+smaller than the number of bytes request, perhaps if the disk becomes full. If the given 
+inumber is invalid, or any other error is encountered, return 0.
+*/
+{
+	// Check if it's been mounted
+	if (IS_MOUNTED == 0){
+		printf("file system has not yet been mounted. \n");
+		return 0;
+	}
+
+	// Check if it's a valid inode
+	if (INODE_BITMAP[inumber] == 0){
+		printf("error in reading.  invalid number.");
+		return 0;
+	}
+
+	// Load the inode into the block
+	union fs_block block;
+	int block_number = inumber/127 + 1;
+	disk_read(block_number, block.data);
+	struct fs_inode my_inode = block.inode[inumber];
+
+	// Loop through the direct blocks of that inode
+	int i, direct_block_num;
+	for (i = 0; i < POINTERS_PER_INODE; i++){
+		direct_block_num = my_inode.direct[i];
+		if (BLOCK_BITMAP[direct_block_num] == 0){
+			// That direct block is free
+		}
+	}
 }

@@ -168,7 +168,6 @@ int fs_mount()
 
 		// Check if a file system is present
 		if (magic_number == FS_MAGIC){
-
 			// Read the superblock
 			struct fs_superblock superblock;
 			superblock = block.super;
@@ -236,10 +235,28 @@ Create a new inode of zero length. On success, return the (positive) inumber. On
 	
 	int num_inodes = block.super.ninodes;
 
-	int i;
+	int i, j;
 	for (i = 0; i < num_inodes; i++){
 		if ((INODE_BITMAP[i] == 0) && (i > 0)){
-			INODE_BITMAP[i] = 1;
+			INODE_BITMAP[i] = 1; 
+
+			// Get the block number
+			int block_num = i / 127 + 1;
+			union fs_block block_to_edit;
+			disk_read(block_num, block_to_edit.data);
+
+			struct fs_inode inode_to_write;
+			inode_to_write.isvalid = 1;
+			inode_to_write.size = 0;
+			for (j = 0; j < POINTERS_PER_INODE; j++){
+				inode_to_write.direct[j] = 0;
+			}
+			inode_to_write.indirect = 0;
+
+			// Write the new inode
+			block_to_edit.inode[i] = inode_to_write;
+			disk_write(block_num, block_to_edit.data);
+
 			return i;
 		}
 	}
@@ -249,8 +266,62 @@ Create a new inode of zero length. On success, return the (positive) inumber. On
 }
 
 int fs_delete( int inumber )
+/* Delete the inode indicated by the inumber. Release all data and indirect blocks assigned to this 
+inode and return them to the free block map. On success, return one. On failure, return 0.
+*/
 {
+	if (IS_MOUNTED == 0){
+		printf("disk not yet mounted \n");
+		return 0;
+	}
+
+	// Convert the numbers
+	int block_number = inumber/127 + 1;
+	int i_number = inumber % 127;
+
+	
+	// Read the block
+	union fs_block block;
+	disk_read(block_number, block.data);
+	int i;
+
+
+	// Set everything to 0
+	if (block.inode[i_number].isvalid == 1){
+		// Set the isvalid to 0
+		block.inode[i_number].isvalid = 0;
+		INODE_BITMAP[i_number] = 0;
+		
+		// Set the size to 0
+		block.inode[i_number].size = 0; 
+
+		// Set the direct to 0
+		for (i = 0; i < POINTERS_PER_INODE; i++){
+			block.inode[i_number].direct[i] = 0;
+			BLOCK_BITMAP[block.inode[i_number].direct[i]] = 0;
+		}
+
+		// Read the indirect block in
+		union fs_block indirect_block;
+		disk_read(block.inode[i_number].indirect , indirect_block.data);
+
+		// Set all the indirect pointers to 0
+		for (i = 0; i < POINTERS_PER_BLOCK; i++){
+			indirect_block.pointers[i] = 0;
+			BLOCK_BITMAP[indirect_block.pointers[i]] = 0;
+		}
+
+		// Set the indirect to 0
+		block.inode[i_number].indirect = 0;     
+
+		// Write the block back to the disk
+		disk_write(block_number, block.data);
+
+		return 1;
+		
+	}
 	return 0;
+	
 }
 
 int fs_getsize( int inumber )

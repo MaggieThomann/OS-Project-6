@@ -491,7 +491,7 @@ inumber is invalid, or any other error is encountered, return 0.
 
 	// Check if it's a valid inode
 	if (INODE_BITMAP[inumber] == 0){
-		printf("error in reading.  invalid number.");
+		printf("error in writing.  invalid number. \n");
 		return 0;
 	}
 
@@ -501,12 +501,37 @@ inumber is invalid, or any other error is encountered, return 0.
 	disk_read(block_number, block.data);
 	struct fs_inode my_inode = block.inode[inumber];
 
-	// Loop through the direct blocks of that inode
+	// Constant for how much data has been written so far
+	int data_written = 0;
+
+	// Add the offset to the data
+	data = data + offset;
+
+	//-------------------------------------------Loop through the direct blocks----------------------------------------
 	int i, direct_block_num;
 	for (i = 0; i < POINTERS_PER_INODE; i++){
-		direct_block_num = my_inode.direct[i];
-		if (BLOCK_BITMAP[direct_block_num] == 0){
-			// That direct block is free
+		direct_block_num = my_inode.direct[i];				// Get the direct block number that inode has
+
+		if (direct_block_num == 0 && BLOCK_BITMAP[direct_block_num] == 0){
+			printf("Allocating a new direct block for inode # %d\n", inumber);
+			//-------------------------------------Allocate a new direct block-------------------------------------
+			int new_direct_block = get_free_block();		// Get a new block
+			printf("Block # %d being allocated \n", new_direct_block);
+			BLOCK_BITMAP[new_direct_block] = 1;			// You're going to use that block, so set it equal to unavailable (1)
+			my_inode.direct[i] = new_direct_block;			// Update the inode's direct array with the new block
+
+			//-----------------------------------------Write to the block-----------------------------------------
+			int w_size = DISK_BLOCK_SIZE;				// Set the default for writing to be equal to the block size
+			if (length - data_written < DISK_BLOCK_SIZE){ 		// If the amount of data to write is smaller than the block size
+				w_size = length - data_written;			// Update the write size to that smaller amount of data
+			}
+			memcpy(block.data, data+data_written, w_size);	// Copy the data over
+			disk_write(new_direct_block, block.data);		// Write the block back to disk
+		}
+
+		else{
+			continue;						// That direct block is already in use 
 		}
 	}
+	return data_written;
 }

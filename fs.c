@@ -13,6 +13,7 @@
 #define INODES_PER_BLOCK   128
 #define POINTERS_PER_INODE 5
 #define POINTERS_PER_BLOCK 1024
+#define NELEMS(x)  (sizeof(x) / sizeof((x)[0]))
 
 int IS_MOUNTED = 0;
 int *BLOCK_BITMAP;
@@ -111,6 +112,7 @@ Scans a mounted filesystem and reports on how the inodes and blocks are organize
 		printf("    magic number is invalid\n");
 	}
 	printf("    %d blocks\n",block.super.nblocks);
+	int num_blocks = block.super.nblocks;
 	printf("    %d inode blocks\n",block.super.ninodeblocks);
 	printf("    %d inodes\n",block.super.ninodes);
 
@@ -119,10 +121,11 @@ Scans a mounted filesystem and reports on how the inodes and blocks are organize
 	int num_inodes_per_block = num_inodes / num_inode_blocks;
 
 	int i, j, k, m;
-	for (j = 1; j <= num_inode_blocks; j++){
+	for (j = 0; j < num_inode_blocks; j++){
 		disk_read(j, block.data);
-		for (i = 0; i < num_inodes_per_block; i++){
-			if (block.inode[i].isvalid != 0){
+		for (i = 1; i < num_inodes_per_block; i++){
+			//printf("block.inode is valid = %d \n", block.inode[i].isvalid);
+			if (block.inode[i].isvalid == 1){
 				printf("inode %d:\n", i);
 				printf("    size %d bytes\n",block.inode[i].size);
 				printf("    direct blocks:");
@@ -137,7 +140,8 @@ Scans a mounted filesystem and reports on how the inodes and blocks are organize
 					printf("    indirect data blocks:");
 					disk_read(block.inode[i].indirect, indirect_block.data);
 					for (m = 0; m < POINTERS_PER_BLOCK; m++){
-						if (indirect_block.pointers[m] != 0){
+						if ((indirect_block.pointers[m] != 0) && (indirect_block.pointers[m] < num_blocks) && (indirect_block.pointers[m] > 0)){
+
 							printf(" %d ", indirect_block.pointers[m]);
 						}
 					}
@@ -202,6 +206,7 @@ int fs_mount()
 
 							disk_read(block.inode[i].indirect, indirect_block.data);
 							for (m = 0; m < POINTERS_PER_BLOCK; m++){
+
 								if (indirect_block.pointers[m] != 0){
 									 BLOCK_BITMAP[indirect_block.pointers[m]] = 1;
 								}
@@ -210,7 +215,12 @@ int fs_mount()
 
 					}
 				}
-			}			
+			}		
+			int p;
+			// Reserve all inode blocks in the free block bitmap
+			for (p = 1; p < superblock.ninodeblocks; p++){
+				BLOCK_BITMAP[p] = 1;
+			}	
 
 			IS_MOUNTED = 1;
 			return 1;
@@ -410,7 +420,6 @@ inode is reached. If the given inumber is invalid, or any other error is encount
 	int data_read_so_far = 0;
 	union fs_block each_block;
 	for (i = begin_block; i < num_direct_blocks; i++){
-		printf("Inside the direct blocks \n");
 		if (i == last_block){
 			index = partial_read;
 		}
@@ -467,7 +476,7 @@ int get_free_block(){
 
 	int i;
 	for (i = 1; i < num_blocks; i++){
-		if (BLOCK_BITMAP[i] == 0){
+		if (BLOCK_BITMAP[i] == 0 && i != 0){
 			return i;    
 		}
 	}
@@ -483,6 +492,9 @@ smaller than the number of bytes request, perhaps if the disk becomes full. If t
 inumber is invalid, or any other error is encountered, return 0.
 */
 {
+
+	//fs_debug();
+
 	// Check if it's been mounted
 	if (IS_MOUNTED == 0){
 		printf("file system has not yet been mounted. \n");
@@ -495,43 +507,287 @@ inumber is invalid, or any other error is encountered, return 0.
 		return 0;
 	}
 
+
+
 	// Load the inode into the block
 	union fs_block block;
 	int block_number = inumber/127 + 1;
+	int i_number = inumber % 127;
 	disk_read(block_number, block.data);
 	struct fs_inode my_inode = block.inode[inumber];
+
+	// Get the size of the inode
+	int size_of_inode = my_inode.size;
+	int size_of_last_block = size_of_inode % DISK_BLOCK_SIZE;
+	int remainder_of_last_block = DISK_BLOCK_SIZE - size_of_last_block;
+	int last_block_is_full = 1;						// Assume the last block is full
+	if (remainder_of_last_block != 0){					// If the remainder calculated isn't 0
+		last_block_is_full = 0;						// The last block isn't full
+	}
+
+	// Get the last block that is full
+	int last_block = ceil((double)(offset + length) / (double)DISK_BLOCK_SIZE);
+
+	
 
 	// Constant for how much data has been written so far
 	int data_written = 0;
 
-	// Add the offset to the data
-	data = data + offset;
-
 	//-------------------------------------------Loop through the direct blocks----------------------------------------
-	int i, direct_block_num;
+	int i, direct_block_num, w_size, new_direct_block;
+	union fs_block d_block;
+
 	for (i = 0; i < POINTERS_PER_INODE; i++){
 		direct_block_num = my_inode.direct[i];				// Get the direct block number that inode has
+		//printf("Processing direct block num %d \n", direct_block_num);
+		disk_read(direct_block_num, d_block.data);			// Read the direct block 
+
+		if ((direct_block_num == last_block) && !(last_block_is_full)){ 	// If we're processing the last block and the last block isn't full
+			//----------------------------------------Last Block Isn't Full----------------------------------------
+			new_direct_block = direct_block_num;			// Set the place to write to the last direct block
+			w_size = remainder_of_last_block;			// Set the size to write the rest of that block
+			if (length < remainder_of_last_block){			// If the amount we have to write is less than the remainder
+				w_size = length;				// Set the size to write equal to the length
+			}
+
+			//-----------------------------------------Write to the block---------------------------------------------
+			memcpy(d_block.data+remainder_of_last_block, data+data_written+offset, w_size);	
+			data_written = data_written + w_size;			// Update how much data has been written so far
+			disk_write(new_direct_block, d_block.data);		// Write the block back to disk
+
+			size_of_inode = size_of_inode + w_size;		// Update the size of the inode
+			block.inode[inumber].size = size_of_inode;		// Reassign it to the inode data
+			disk_write(block_number, block.data);			// Write that inode data back to disk
+
+			if (data_written == length){
+				return data_written;
+			}
+
+		}
 
 		if (direct_block_num == 0 && BLOCK_BITMAP[direct_block_num] == 0){
-			printf("Allocating a new direct block for inode # %d\n", inumber);
-			//-------------------------------------Allocate a new direct block-------------------------------------
-			int new_direct_block = get_free_block();		// Get a new block
-			printf("Block # %d being allocated \n", new_direct_block);
+			//-------------------------------------Allocate a new direct block------------------------------------
+			new_direct_block = get_free_block();			// Get a new block
+			//printf("writing to direct block: %d \n", new_direct_block);
+			block.inode[inumber].direct[i] = new_direct_block;	// Add that new direct block to the array
+			disk_write(block_number, block.data);			// Write it back to disk
+
+			if (new_direct_block == 0){				// There are no more free blocks
+				return data_written;				// Just return the amount of data written so far
+			}
 			BLOCK_BITMAP[new_direct_block] = 1;			// You're going to use that block, so set it equal to unavailable (1)
 			my_inode.direct[i] = new_direct_block;			// Update the inode's direct array with the new block
-
-			//-----------------------------------------Write to the block-----------------------------------------
-			int w_size = DISK_BLOCK_SIZE;				// Set the default for writing to be equal to the block size
+			w_size = DISK_BLOCK_SIZE;				// Set the default for writing to be equal to the block size
 			if (length - data_written < DISK_BLOCK_SIZE){ 		// If the amount of data to write is smaller than the block size
 				w_size = length - data_written;			// Update the write size to that smaller amount of data
 			}
-			memcpy(block.data, data+data_written, w_size);	// Copy the data over
-			disk_write(new_direct_block, block.data);		// Write the block back to disk
+
+			//-----------------------------------------Write to the block---------------------------------------------
+			memcpy(d_block.data, data+data_written+offset, w_size);	// Copy the data over
+			data_written = data_written + w_size;				// Update how much data has been written so far
+			disk_write(new_direct_block, d_block.data);			// Write the block back to disk
+
+			size_of_inode = size_of_inode + w_size;			// Update the size of the inode
+			block.inode[inumber].size = size_of_inode;			// Reassign it to the inode data
+			disk_write(block_number, block.data);				// Write that inode data back to disk
+
+			if (data_written == length){
+				return data_written;
+			}
 		}
 
-		else{
-			continue;						// That direct block is already in use 
+	}
+	//------------------------------------------Loop through the indirect blocks---------------------------------------
+
+	// Reinitialize the block
+	union fs_block og_block;
+	block_number = inumber/127 + 1;
+	disk_read(block_number, og_block.data);
+	my_inode = og_block.inode[inumber];
+
+	//printf("indirect from og: %d \n", my_inode.indirect);
+
+	int indirect_present = my_inode.indirect;
+
+	size_of_inode = my_inode.size;
+
+	int j, new_indirect_block;
+	union fs_block indirect_block;
+	union fs_block pointer_block;
+	if (data_written < length){						// All the data has not been written yet
+
+		//---------------------------------------NO INDIRECT BLOCK PRESENT----------------------------------------------
+		if (!indirect_present){						// There is no indirect block present
+			int new_indirect_num = get_free_block();		// Get a new block number for that indirect block
+			if (new_indirect_num == 0){				// There are no more free blocks
+				return data_written;				// Return the amount of data written so far
+			}
+			//printf("Initializing indirect block %d \n", new_indirect_num);
+			BLOCK_BITMAP[new_indirect_num] = 1;			// Set it to unavailable
+			og_block.inode[i_number].indirect = new_indirect_num;	// Assign the indirect to that block
+
+			disk_write(block_number, og_block.data);			// Write it back
+
+			disk_read(new_indirect_num, indirect_block.data);	// Read that new indirect block
+
+			/*int u;
+			for (u = 0; u < POINTERS_PER_BLOCK; u++){
+				printf("u = %d and data is %d \n", u, indirect_block.pointers[u]);
+			}*/
+
+			while(data_written < length){
+				for (j = 0; j < POINTERS_PER_BLOCK; j++){
+					//------------------------------Allocate a new indirect pointer-----------------------------------
+					int new_i_block = get_free_block();					// Get a new block
+					if (new_i_block == 0){							// There are no more free blocks
+						return data_written;						// Return the amount of data written so far
+					}
+					BLOCK_BITMAP[new_i_block] = 1;					// Set the block to unavailable
+					indirect_block.pointers[j] = new_i_block;				// Update inode's indirect ptrs w/ new block	
+					
+					disk_write(new_indirect_num, indirect_block.data);			// Write the indirect block back to disk
+					
+
+					disk_read(new_i_block, pointer_block.data);				// Read that pointer block in
+					
+					//-----------------------------------Write to the block----------------------------------------
+					int w_size = DISK_BLOCK_SIZE;						// Set the default for writing to be 
+														// equal to the block size
+					if (length - data_written < DISK_BLOCK_SIZE){ 				// If the amount of data to write is smaller 
+														// than the block size
+						w_size = length - data_written;					// Update the write size
+					}
+					memcpy(pointer_block.data, data+data_written+offset, w_size);	// Copy the data over
+					data_written = data_written + w_size;					// Update how much data has been 
+														// written so far
+					disk_write(new_i_block, pointer_block.data);				// Write the pointer block back to disk
+
+					size_of_inode = size_of_inode + w_size;			// Update the size of the inode
+					og_block.inode[inumber].size = size_of_inode;			// Reassign it to the inode data
+					disk_write(block_number, og_block.data);			// Write that inode data back to disk
+
+					//printf("Writing to pointer block %d \n", new_i_block);
+					
+					if (data_written == length){
+						return data_written;
+					}
+				}
+			}
+
+		}
+		//---------------------------------------INDIRECT BLOCK IS PRESENT----------------------------------------------
+		else{									
+			//printf("Indirect block is present and is: %d\n", indirect_present);
+			disk_read(indirect_present, indirect_block.data);
+
+			int last_indirect_ptr;
+
+			/*int y;
+			for (y = 0; y < POINTERS_PER_BLOCK; y++){
+				printf("y = %d and data is %d \n", y, indirect_block.pointers[y]);
+			}*/
+
+			union fs_block super;
+			disk_read(0, super.data);
+			int total_blocks = super.super.nblocks;
+
+			int o, index;
+			int num_of_indirect_blocks = 0;
+			for (o = 0; o < 1024; o++){
+				if (indirect_block.pointers[o] < total_blocks){
+					
+					num_of_indirect_blocks++;
+				}
+				else{
+					index = o - 1;
+					last_indirect_ptr = indirect_block.pointers[index];
+					break;
+				}
+			}
+			//printf("num of indirect blocks is: %d \n", num_of_indirect_blocks);
+			//printf("called debug before if statement for last block is full \n");
+			//fs_debug();
+			if (!last_block_is_full){						// The last indirect block is not completely full
+				disk_read(last_indirect_ptr, indirect_block.data);
+				//printf("Last blog isn't full \n");
+				//----------------------------Last Block Isn't Full---------------------------------------------
+				new_indirect_block = last_indirect_ptr;			// Set the place to write to the last direct block
+				w_size = remainder_of_last_block;			// Set the size to write the rest of that block
+				if (length < remainder_of_last_block){			// If the amount we have to write is less than the remainder
+					w_size = length;				// Set the size to write equal to the length
+				}
+				//printf("Size to write is %d \n", w_size);
+				//--------------------------------Write to the block------------------------------------------
+				memcpy(indirect_block.data, data+data_written+offset, w_size);	
+				data_written = data_written + w_size;			// Update how much data has been written so far
+				disk_write(last_indirect_ptr, indirect_block.data);	// Write back to disk
+
+				//printf("**AFTER WRITING TO THE LAST BLOW \n");
+				//printf("Writing to indirect block %d\n", new_indirect_block);
+				//fs_debug();
+
+				//printf("Size of the inode before update: %d \n", size_of_inode);
+				size_of_inode = size_of_inode + w_size;			// Update the size of the inode
+
+				og_block.inode[inumber].size = size_of_inode;			// Reassign it to the inode data
+				disk_write(block_number, og_block.data);			// Write that inode data back to disk
+				
+				
+				//fs_debug();
+				if (data_written == length){
+					return data_written;
+				}
+			}
+			while(data_written < length){
+				for (j = num_of_indirect_blocks; j <= POINTERS_PER_BLOCK; j++){
+					//------------------------------Allocate a new indirect pointer-----------------------------------
+					int new_i_block = get_free_block();		// Get a new block
+					if (new_i_block == 0){
+						return data_written;
+					}
+					//printf("new pointer is: %d \n", new_i_block);
+					//printf("j position for the new pointer in the pointer array is %d \n", j);
+					BLOCK_BITMAP[new_i_block] = 1;		// You're going to use that block, so set it equal to unavailable (1)
+					indirect_block.pointers[j] = new_i_block;	// Update the inode's indirect ptrs with the new block	
+					//printf("before the write for new pointers \n");
+					//fs_debug();
+					//printf("indirect we're writing back to: %d \n", indirect_present);
+					union fs_block indirect_block_again;
+					disk_read(indirect_present, indirect_block_again.data);
+					indirect_block_again.pointers[j] = new_i_block;
+					disk_write(indirect_present, indirect_block_again.data);
+					//disk_write(indirect_present, indirect_block.data);			// Write the indirect block back to disk
+					//fs_debug();
+
+					//-----------------------------------Write to the block----------------------------------------
+					int w_size = DISK_BLOCK_SIZE;					// Set the default for writing to be equal to the block size
+					if (length - data_written < DISK_BLOCK_SIZE){ 			// If the amount of data to write is smaller than the block size
+						w_size = length - data_written;				// Update the write size to that smaller amount of data
+					}
+					memcpy(indirect_block.data, data+data_written+offset, w_size);	// Copy the data over
+					data_written = data_written + w_size;					// Update how much data has been written so far
+					disk_write(new_i_block, indirect_block.data);				// Write the block back to disk
+
+					//printf("Writing to indirect block %d\n", new_i_block);
+					//fs_debug();
+					size_of_inode = size_of_inode + w_size;			// Update the size of the inode
+
+					//printf("Size of the inode: %d \n", size_of_inode);
+					og_block.inode[inumber].size = size_of_inode;			// Reassign it to the inode data
+					disk_write(block_number, og_block.data);			// Write that inode data back to disk
+
+					
+					if (data_written == length){
+						return data_written;
+					}
+				}
+			}
+
 		}
 	}
-	return data_written;
+	return 0;
 }
+
+
+
+
